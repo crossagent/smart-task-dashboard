@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: smart-task-dashboard
+Version: 0.1.0
+Summary: Dashboard and API server for Smart Task Hub
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: psycopg2-binary
+Requires-Dist: python-dotenv
+Requires-Dist: jinja2

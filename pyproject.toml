@@ -10,6 +10,9 @@ dependencies = [
     "jinja2",
 ]
 
+[tool.setuptools]
+packages = ["api"]
+
 [project.scripts]
 start-dashboard = "api.server:main"
 

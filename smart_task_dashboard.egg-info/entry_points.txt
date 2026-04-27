@@ -1,0 +1,2 @@
+[console_scripts]
+start-dashboard = api.server:main
