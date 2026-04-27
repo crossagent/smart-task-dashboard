@@ -1,25 +1,21 @@
 import os
-import threading
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastmcp.utilities.lifespan import combine_lifespans
 from contextlib import asynccontextmanager
 
 # Simple flat imports
-from .mcp_app import mcp
-from . import tools 
 from .supervisor import agent_supervisor
 from .dashboard_api import router as dashboard_router
-import logging
 
-logger = logging.getLogger("smart_task.mcp_server")
+logger = logging.getLogger("smart_task.dashboard_server")
 logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    """Lifecycle hook to start project-specific background processes."""
-    logger.info("Starting up project background tasks...")
+    """Lifecycle hook to start background processes."""
+    logger.info("Starting up Dashboard Server background tasks...")
 
     if os.getenv("DOCKER_MANAGED_AGENTS", "false").lower() != "true":
         agent_supervisor.bootstrap()
@@ -28,15 +24,12 @@ async def app_lifespan(app: FastAPI):
         agent_supervisor.load_config()
     
     yield
-    logger.info("Shutting down project background tasks...")
+    logger.info("Shutting down Dashboard Server...")
 
-# Create the MCP app with streamable-http transport
-mcp_app = mcp.http_app(transport="streamable-http")
-
-# Create the main FastAPI app and combine lifespans
+# Create the main FastAPI app
 app = FastAPI(
     title="Smart Task Hub Dashboard", 
-    lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan)
+    lifespan=app_lifespan
 )
 
 # Add CORS to the main app
@@ -45,20 +38,23 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["mcp-session-id"],
 )
 
 app.include_router(dashboard_router)
 
-if os.path.exists("dashboard/dist"):
-    app.mount("/dashboard", StaticFiles(directory="dashboard/dist", html=True), name="dashboard")
+# Mount frontend if it exists
+if os.path.exists("frontend/dist"):
+    app.mount("/dashboard", StaticFiles(directory="frontend/dist", html=True), name="dashboard")
+elif os.path.exists("dashboard-server/frontend/dist"):
+    app.mount("/dashboard", StaticFiles(directory="dashboard-server/frontend/dist", html=True), name="dashboard")
 
-# Merge MCP routes directly into the main app to avoid mounting/priority issues
-for route in mcp_app.routes:
-    app.routes.append(route)
+@app.get("/")
+async def root():
+    return {"message": "Smart Task Dashboard API is running"}
 
 if __name__ == "__main__":
     import uvicorn
     
     port = int(os.getenv("PORT", "45666"))
+    logger.info(f"Dashboard running on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
