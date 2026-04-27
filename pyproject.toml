@@ -1,0 +1,18 @@
+[project]
+name = "smart-task-dashboard"
+version = "0.1.0"
+description = "Dashboard and API server for Smart Task Hub"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "psycopg2-binary",
+    "python-dotenv",
+    "jinja2",
+]
+
+[project.scripts]
+start-dashboard = "api.server:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

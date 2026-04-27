@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-brand-dark text-slate-100 min-h-screen overflow-x-hidden;
+}
+
+.glass-panel {
+  @apply bg-slate-900/50 backdrop-blur-md border border-slate-700/50 rounded-xl;
+}
+
+.pulsing-yellow {
+  animation: pulse-yellow 2s infinite;
+}
+
+@keyframes pulse-yellow {
+  0% { box-shadow: 0 0 0 0 rgba(252, 211, 77, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(252, 211, 77, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(252, 211, 77, 0); }
+}
+
+.mermaid {
+  @apply bg-transparent p-4 flex justify-center items-center;
+}
