@@ -3,33 +3,16 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from contextlib import asynccontextmanager
 
 # Simple flat imports
-from .supervisor import agent_supervisor
 from .dashboard_api import router as dashboard_router
 
 logger = logging.getLogger("smart_task.dashboard_server")
 logging.basicConfig(level=logging.INFO)
 
-@asynccontextmanager
-async def app_lifespan(app: FastAPI):
-    """Lifecycle hook to start background processes."""
-    logger.info("Starting up Dashboard Server background tasks...")
-
-    if os.getenv("DOCKER_MANAGED_AGENTS", "false").lower() != "true":
-        agent_supervisor.bootstrap()
-    else:
-        logger.info("Agents are managed by Docker. Loading config...")
-        agent_supervisor.load_config()
-    
-    yield
-    logger.info("Shutting down Dashboard Server...")
-
 # Create the main FastAPI app
 app = FastAPI(
-    title="Smart Task Hub Dashboard", 
-    lifespan=app_lifespan
+    title="Smart Task Hub Dashboard"
 )
 
 # Add CORS to the main app

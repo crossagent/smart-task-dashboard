@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional, List
 from .db import execute_query, execute_mutation
-from . import engine
 import json
 
 router = APIRouter(prefix="/api")
@@ -57,16 +56,12 @@ async def get_activity_graph(activity_id: str):
         edges = []
         
         for t in tasks:
-            # Node metadata
             nodes.append({
                 "id": t['id'],
                 "label": f"{t['id']}\n({t['module_id']})",
                 "status": t['status'],
-
                 "goal": t['module_iteration_goal']
             })
-            
-            # Edges from depends_on
             deps = t['depends_on'] or []
             for dep_id in deps:
                 edges.append({"from": dep_id, "to": t['id']})
@@ -79,17 +74,10 @@ async def get_activity_graph(activity_id: str):
 async def get_activity_details(activity_id: str):
     """Aggregated stats and metadata for the activity."""
     act_sql = "SELECT * FROM activities WHERE id = %s"
-    prog_sql = "SELECT * FROM v_activity_progress WHERE activity_id = %s"
     ms_sql = "SELECT count(*) as total, count(*) FILTER (WHERE status = 'Achieved') as achieved FROM milestones WHERE activity_id = %s"
     
     try:
         act = execute_query(act_sql, (activity_id,))
-        try:
-            prog = execute_query(prog_sql, (activity_id,))
-        except Exception:
-            # Fallback if view doesn't exist
-            prog = None
-        
         milestones = execute_query(ms_sql, (activity_id,))
         ms_stats = milestones[0] if milestones else {"total": 0, "achieved": 0}
         
@@ -98,7 +86,6 @@ async def get_activity_details(activity_id: str):
             
         return {
             "metadata": act[0],
-            "progress": prog[0] if prog else {"completion_percentage": 0},
             "milestone_stats": ms_stats
         }
     except Exception as e:
@@ -119,7 +106,6 @@ async def achieve_milestone(milestone_id: str):
     sql = "UPDATE milestones SET status = 'Achieved', reached_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
     try:
         execute_mutation(sql, (milestone_id,))
-        # Emit event
         execute_mutation("""
             INSERT INTO events (event_type, source, severity, payload)
             VALUES ('milestone_achieved', 'human', 'normal', %s)
@@ -157,11 +143,10 @@ async def get_blueprints(
 
 @router.post("/blueprint/{plan_id}/approve")
 async def approve_blueprint(plan_id: int):
-    """Approve a blueprint plan. This will likely be picked up by the Architect."""
+    """Approve a blueprint plan."""
     sql = "UPDATE blueprint_plans SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE id = %s"
     try:
         execute_mutation(sql, (plan_id,))
-        # Emit an event to notify the Architect to execute
         execute_mutation("""
             INSERT INTO events (event_type, source, severity, payload)
             VALUES ('plan_approved', 'human', 'critical', %s)
@@ -182,57 +167,54 @@ async def reject_blueprint(plan_id: int):
 
 @router.post("/activity/{activity_id}/activate_planner")
 async def activate_planner(activity_id: str):
-    """Manually triggers the Planner (PM Agent) to review the activity board."""
-    from .supervisor import agent_supervisor
-    import threading
-    
-    # Locate the Project Manager Agent (typically RES-PM-001)
-    pm_url = agent_supervisor.get_agent_url("RES-PM-001")
-    if not pm_url:
-        raise HTTPException(status_code=500, detail="Project Manager agent (RES-PM-001) not found or not running.")
-        
-    instruction = f"Please review the current events and tasks for activity {activity_id} and propose any necessary blueprint modifications."
-    
-    # Trigger asynchronously using a simple HTTP call
-    from .engine import _send_agent_request
-    import threading
-    threading.Thread(
-        target=_send_agent_request, 
-        args=(pm_url, "project_manager", f"plan_{activity_id}", instruction)
-    ).start()
-    
-    return {"status": "success", "message": "Planner activated. Check blueprints for new proposals."}
+    """Manually triggers the Planner via an event."""
+    try:
+        execute_mutation("""
+            INSERT INTO events (event_type, source, severity, activity_id, payload)
+            VALUES ('planner_requested', 'human', 'normal', %s, %s)
+        """, (activity_id, json.dumps({"reason": "Manual activation via Dashboard"})))
+        return {"status": "success", "message": "Planner activation event emitted."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/system/step")
 async def trigger_engine_step():
-    """Manually process the next pending event in the bus."""
+    """Request the engine to process the next step."""
     try:
-        result = engine.step()
-        if not result:
-            return {"status": "idle", "message": "No pending events to process."}
-        return {"status": "success", "processed": result}
+        execute_mutation("""
+            INSERT INTO events (event_type, source, severity, payload)
+            VALUES ('step_requested', 'human', 'normal', '{}')
+        """)
+        return {"status": "success", "message": "Step request emitted."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/system/settings")
 async def get_system_settings():
-    """Retrieve current system execution settings."""
-    return {
-        "auto_advance": engine.get_auto_advance()
-    }
+    """Retrieve current system execution settings from DB."""
+    try:
+        res = execute_query("SELECT value FROM system_state WHERE key = 'run_mode'")
+        mode = res[0]['value'] if res else "auto"
+        return {"auto_advance": mode == "auto"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/system/settings")
 async def update_system_settings(auto_advance: bool):
-    """Update system execution settings (e.g., toggle Auto/Manual mode)."""
+    """Update system execution settings via DB."""
+    mode = "auto" if auto_advance else "manual"
     try:
-        engine.set_auto_advance(auto_advance)
+        execute_mutation("""
+            INSERT INTO system_state (key, value) VALUES ('run_mode', %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, (json.dumps(mode),))
         return {"status": "success", "auto_advance": auto_advance}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/activity/{activity_id}/instruction")
 async def update_activity_instruction(activity_id: str, instruction: str):
-    """Updates user instruction and bumps version and triggers PM via event."""
+    """Updates user instruction via SQL and emits an event."""
     sql = """
         UPDATE activities 
         SET user_instruction = %s, 
@@ -242,72 +224,52 @@ async def update_activity_instruction(activity_id: str, instruction: str):
         RETURNING instruction_version
     """
     try:
-        # Use execute_query to get the RETURNING value
         result = execute_query(sql, (instruction, activity_id))
         version = result[0]['instruction_version'] if result else 0
-        
-        # Emit event directly (human-initiated)
         payload = json.dumps({'instruction': instruction, 'version': version})
         execute_mutation("""
             INSERT INTO events (event_type, source, severity, activity_id, payload)
             VALUES ('human_instruction', 'human', 'critical', %s, %s)
         """, (activity_id, payload))
-        
-        # Record version so scheduler doesn't double-detect
-        execute_mutation("""
-            INSERT INTO system_state (key, value) 
-            VALUES ('last_human_evt_' || %s, %s)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-        """, (activity_id, str(version)))
-        
         return {"status": "success", "version": version}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# --- EVENT TIMELINE API ---
-
 @router.get("/events")
 async def get_events(
-    status: Optional[str] = Query(None, description="Filter by status: pending, processing, resolved, dismissed"),
-    activity_id: Optional[str] = Query(None, description="Filter by activity"),
-    limit: int = Query(50, description="Max results"),
-    offset: int = Query(0, description="Offset for pagination")
+    status: Optional[str] = Query(None),
+    activity_id: Optional[str] = Query(None),
+    limit: int = Query(50),
+    offset: int = Query(0)
 ):
-    """Returns the event timeline for the dashboard."""
+    """Returns the event timeline."""
     sql = "SELECT * FROM events"
     params = []
     where_clauses = []
-
     if status:
         where_clauses.append("status = %s")
         params.append(status)
     if activity_id:
         where_clauses.append("activity_id = %s")
         params.append(activity_id)
-    
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
-    
     sql += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
     params.extend([limit, offset])
-    
     try:
-        results = execute_query(sql, tuple(params))
-        return results
+        return execute_query(sql, tuple(params))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/events")
 async def create_event(
     event_type: str,
-    severity: str = Query("normal"),
-    activity_id: Optional[str] = Query(None),
-    task_id: Optional[str] = Query(None),
-    payload: str = Query("{}")
+    severity: str = "normal",
+    activity_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    payload: str = "{}"
 ):
-    """Human-initiated event creation from the dashboard."""
+    """Manual event creation."""
     try:
         execute_mutation("""
             INSERT INTO events (event_type, source, severity, activity_id, task_id, payload)
@@ -317,21 +279,14 @@ async def create_event(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @router.post("/events/{event_id}/dismiss")
 async def dismiss_event(event_id: int):
-    """Dismiss (ignore) a pending event."""
+    """Dismiss a pending event."""
     try:
-        count = execute_mutation("""
-            UPDATE events 
-            SET status = 'dismissed', resolved_by = 'human', resolved_at = CURRENT_TIMESTAMP 
+        execute_mutation("""
+            UPDATE events SET status = 'dismissed', resolved_by = 'human', resolved_at = CURRENT_TIMESTAMP 
             WHERE id = %s AND status = 'pending'
         """, (event_id,))
-        if count == 0:
-            raise HTTPException(status_code=404, detail="Event not found or already processed")
         return {"status": "success", "message": f"Event #{event_id} dismissed."}
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
