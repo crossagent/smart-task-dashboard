@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 # Simple flat imports
 from .dashboard_api import router as dashboard_router
@@ -33,6 +34,11 @@ elif os.path.exists("dashboard-server/frontend/dist"):
 
 @app.get("/")
 async def root():
+    # Check which path exists
+    dist_path = "frontend/dist" if os.path.exists("frontend/dist") else "dashboard-server/frontend/dist"
+    index_file = os.path.join(dist_path, "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
     return {"message": "Smart Task Dashboard API is running"}
 
 if __name__ == "__main__":
