@@ -12,11 +12,11 @@ async def get_activities(
 ):
     """List activities with optional date filtering."""
     sql = """
-        SELECT a.id, a.name, a.status, a.priority, a.created_at, 
-               COUNT(m.id) as ms_total, 
-               COUNT(m.id) FILTER (WHERE m.status = 'Achieved') as ms_achieved 
+        SELECT a.id, a.name, a.status, a.priority, a.created_at,
+               COUNT(m.id) as ms_total,
+               COUNT(m.id) FILTER (WHERE m.status = 'Achieved') as ms_achieved
         FROM activities a
-        LEFT JOIN milestones m ON a.id = m.activity_id
+        LEFT JOIN milestones m ON a.milestone_id = m.id
     """
     params = []
     
@@ -74,7 +74,13 @@ async def get_activity_graph(activity_id: str):
 async def get_activity_details(activity_id: str):
     """Aggregated stats and metadata for the activity."""
     act_sql = "SELECT * FROM activities WHERE id = %s"
-    ms_sql = "SELECT count(*) as total, count(*) FILTER (WHERE status = 'Achieved') as achieved FROM milestones WHERE activity_id = %s"
+    ms_sql = """
+        SELECT count(*) as total,
+               count(*) FILTER (WHERE m.status = 'Achieved') as achieved
+        FROM activities a
+        JOIN milestones m ON a.milestone_id = m.id
+        WHERE a.id = %s
+    """
     
     try:
         act = execute_query(act_sql, (activity_id,))
@@ -93,8 +99,14 @@ async def get_activity_details(activity_id: str):
 
 @router.get("/activity/{activity_id}/milestones")
 async def get_activity_milestones(activity_id: str):
-    """List all milestones for a specific activity."""
-    sql = "SELECT * FROM milestones WHERE activity_id = %s ORDER BY target_date ASC NULLS LAST, created_at ASC"
+    """List the temporal milestone that governs a specific activity."""
+    sql = """
+        SELECT m.*
+        FROM activities a
+        JOIN milestones m ON a.milestone_id = m.id
+        WHERE a.id = %s
+        ORDER BY m.target_date ASC NULLS LAST, m.created_at ASC
+    """
     try:
         return execute_query(sql, (activity_id,))
     except Exception as e:
